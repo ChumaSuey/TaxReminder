@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 
 # FIX: Force Tcl/Tk paths for Windows Virtual Environments
 if sys.platform == 'win32':
@@ -36,6 +37,36 @@ class TaxReminderMainGUI:
         
         self.setup_styles()
         self.create_widgets()
+        
+        self.ack_file = os.path.join(base_dir, 'acknowledgements.json')
+        
+    def _load_acks(self) -> Dict[str, Any]:
+        if os.path.exists(self.ack_file):
+            try:
+                with open(self.ack_file, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+
+    def _save_acks(self, data: Dict[str, Any]):
+        try:
+            with open(self.ack_file, 'w') as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            messagebox.showerror("Error", f"Error al guardar pago: {e}")
+
+    def _get_ack_key(self, table_name: str, month: int, day: int) -> str:
+        # Match Telegram Bot format: YYYY_TableName_M_D
+        # Note: We need the year of the tax date, not necessarily current year.
+        # But for "upcoming" logic usually it's current or next year.
+        # Ideally we pass the full date object or calculated year.
+        # For now let's assume standard calculation logic inside the loop matches this.
+        today = date.today()
+        current_year = today.year
+        if month < today.month or (month == today.month and day < today.day):
+            current_year += 1
+        return f"{current_year}_{table_name}_{month}_{day}"
         
     def setup_styles(self):
         """Configure dark mode styles"""
@@ -182,6 +213,9 @@ class TaxReminderMainGUI:
             today_reminders = []
             upcoming_reminders = []
 
+            # Load acknowledgements
+            acks = self._load_acks()
+
             # Logic same as gui_short.py / mainshort.py
             for days_ahead in range(0, 3):
                 check_date = today + timedelta(days=days_ahead)
@@ -201,12 +235,18 @@ class TaxReminderMainGUI:
                         reminder_date = date(current_year, date_obj.month, date_obj.day)
                         days_until = (reminder_date - today).days
 
+                        # Check if paid
+                        ack_key = self._get_ack_key(date_obj.table_name, date_obj.month, date_obj.day)
+                        if ack_key in acks:
+                            continue # Skip paid taxes
+
                         reminder = {
                             'table_description': table_desc,
                             'month': date_obj.month,
                             'day': date_obj.day,
                             'description': date_obj.description,
-                            'days_until': days_until
+                            'days_until': days_until,
+                            'ack_key': ack_key # Pass key for button
                         }
 
                         if days_until == 0:
@@ -261,6 +301,17 @@ class TaxReminderMainGUI:
         ttk.Label(card, text=f"📅 {reminder['day']} de {month_name}{days_text}", style='CardText.TLabel').pack(anchor='w')
         if reminder.get('description'):
             ttk.Label(card, text=f"📝 {reminder['description']}", style='CardDesc.TLabel').pack(anchor='w', pady=(5, 0))
+
+        # Pay Button
+        def pay_action():
+            if messagebox.askyesno("Confirmar Pago", f"¿Marcar '{desc}' como PAGADO?"):
+                acks = self._load_acks()
+                acks[reminder['ack_key']] = date.today().isoformat()
+                self._save_acks(acks)
+                self.refresh_dashboard() # Reload to hide
+                messagebox.showinfo("Hecho", "Impuesto marcado como pagado.")
+
+        ttk.Button(card, text="✅ Registrar Pago", command=pay_action).pack(anchor='e', pady=(10, 0))
 
     # ================= MANAGE TAB =================
 

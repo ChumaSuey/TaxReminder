@@ -1,0 +1,12 @@
+telegram_bot.py
+authorized_users.json
+acknowledgements.json
+dev_users.json
+tax_reminder.db
+.venv/
+__pycache__/
+.idea/
+build/
+dist/
+*.spec
+result.txt

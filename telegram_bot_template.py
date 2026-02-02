@@ -10,9 +10,9 @@ from models import DatabaseManager, TaxDate, TaxTable
 import argparse
 
 # --- Configuration ---
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8518113467:AAGlL_BOvmv4oBh-KCvITVGnhf45LH1hkcc")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "226321594")
-SECRET_PASSWORD = os.getenv("TELEGRAM_BOT_PASSWORD", "servifletesdeoccidente")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_CHAT_ID_HERE")
+SECRET_PASSWORD = os.getenv("TELEGRAM_BOT_PASSWORD", "YOUR_SECRET_PASSWORD_HERE")
 
 DATABASE_URL = "sqlite:///tax_reminder.db"
 ACK_FILE = "acknowledgements.json"
