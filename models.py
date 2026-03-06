@@ -34,9 +34,25 @@ class TaxDate(Base):
     
     # Relationship to table
     table = relationship("TaxTable", back_populates="dates")
+    payments = relationship("TaxPayment", back_populates="tax_date", cascade="all, delete-orphan")
     
     def __repr__(self):
         return f"<TaxDate(table='{self.table_name}', month={self.month}, day={self.day}, description='{self.description}')>"
+
+class TaxPayment(Base):
+    """Represents a record of a tax payment"""
+    __tablename__ = 'tax_payments'
+    
+    id = Column(Integer, primary_key=True)
+    tax_date_id = Column(Integer, ForeignKey('tax_dates.id'), nullable=False)
+    year = Column(Integer, nullable=False)
+    payment_date = Column(Date, default=date.today)
+    
+    # Relationship to tax date
+    tax_date = relationship("TaxDate", back_populates="payments")
+
+    def __repr__(self):
+        return f"<TaxPayment(tax_date_id={self.tax_date_id}, year={self.year}, payment_date='{self.payment_date}')>"
 
 class DatabaseManager:
     """Handles all database operations"""
@@ -147,6 +163,7 @@ class DatabaseManager:
             ).all()
             
             return [{
+                'id': date_obj.id,
                 'table': date_obj.table_name,
                 'table_description': table_desc,
                 'month': date_obj.month,
@@ -197,3 +214,72 @@ class DatabaseManager:
             db.delete(date_obj)
             db.commit()
             return True
+
+    def mark_as_paid(self, tax_date_id: int, year: int) -> bool:
+        """Mark a tax as paid for a specific year"""
+        with self.get_db() as db:
+            # Check if tax date exists
+            tax_date = db.query(TaxDate).filter(TaxDate.id == tax_date_id).first()
+            if not tax_date:
+                return False
+                
+            # Check if already paid
+            existing = db.query(TaxPayment).filter(
+                TaxPayment.tax_date_id == tax_date_id,
+                TaxPayment.year == year
+            ).first()
+            
+            if existing: # Update date
+                existing.payment_date = date.today()
+            else:
+                payment = TaxPayment(tax_date_id=tax_date_id, year=year)
+                db.add(payment)
+                
+            db.commit()
+            return True
+
+    def unmark_as_paid(self, payment_id: int) -> bool:
+        """Remove a payment record"""
+        with self.get_db() as db:
+            payment = db.query(TaxPayment).filter(TaxPayment.id == payment_id).first()
+            if not payment:
+                return False
+                
+            db.delete(payment)
+            db.commit()
+            return True
+
+    def is_paid(self, tax_date_id: int, year: int) -> bool:
+        """Check if a tax is marked as paid for a specific year"""
+        with self.get_db() as db:
+            payment = db.query(TaxPayment).filter(
+                TaxPayment.tax_date_id == tax_date_id,
+                TaxPayment.year == year
+            ).first()
+            return payment is not None
+
+    def get_payment_history(self, year: int = None) -> List[Dict[str, Any]]:
+        """Get payment history, optionally filtered by year"""
+        with self.get_db() as db:
+            query = db.query(TaxPayment, TaxDate, TaxTable.description).join(
+                TaxDate, TaxPayment.tax_date_id == TaxDate.id
+            ).join(
+                TaxTable, TaxDate.table_name == TaxTable.name
+            )
+            
+            if year is not None:
+                query = query.filter(TaxPayment.year == year)
+                
+            results = query.order_by(TaxPayment.payment_date.desc()).all()
+            
+            return [{
+                'payment_id': payment.id,
+                'tax_date_id': tdate.id,
+                'table': tdate.table_name,
+                'table_description': tdesc,
+                'month': tdate.month,
+                'day': tdate.day,
+                'description': tdate.description,
+                'year': payment.year,
+                'payment_date': payment.payment_date.isoformat()
+            } for payment, tdate, tdesc in results]

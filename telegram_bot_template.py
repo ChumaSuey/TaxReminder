@@ -15,7 +15,6 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_CHAT_ID_HERE")
 SECRET_PASSWORD = os.getenv("TELEGRAM_BOT_PASSWORD", "YOUR_SECRET_PASSWORD_HERE")
 
 DATABASE_URL = "sqlite:///tax_reminder.db"
-ACK_FILE = "acknowledgements.json"
 AUTH_FILE = "authorized_users.json"
 DEV_FILE = "dev_users.json"
 
@@ -27,9 +26,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class TaxBot:
-    def __init__(self, db_manager: DatabaseManager, ack_file: str, auth_file: str, dev_file: str = DEV_FILE):
+    def __init__(self, db_manager: DatabaseManager, auth_file: str, dev_file: str = DEV_FILE):
         self.db = db_manager
-        self.ack_file = ack_file
         self.auth_file = auth_file
         self.dev_file = dev_file
         self.last_update_id = 0
@@ -38,7 +36,6 @@ class TaxBot:
 
     def reload_configs(self):
         """Reload all JSON configuration files from disk."""
-        self.acks = self._load_data(self.ack_file)
         self.authorized_users = self._load_data(self.auth_file)
         self.dev_users = self._load_data(self.dev_file)
 
@@ -58,12 +55,8 @@ class TaxBot:
         except Exception as e:
             logger.error(f"Error saving {file_path}: {e}")
 
-    def _get_ack_key(self, tax: Dict[str, Any], check_date: date) -> str:
-        return f"{check_date.year}_{tax['table']}_{tax['month']}_{tax['day']}"
-
-    def acknowledge_tax(self, ack_key: str):
-        self.acks[ack_key] = date.today().isoformat()
-        self._save_data(self.ack_file, self.acks)
+    def acknowledge_tax(self, tax_date_id: int, year: int):
+        self.db.mark_as_paid(tax_date_id, year)
 
     def authorize_user(self, chat_id: int):
         self.authorized_users[str(chat_id)] = date.today().isoformat()
@@ -85,10 +78,9 @@ class TaxBot:
             check_date = today + timedelta(days=days_ahead)
             results = self.db.get_dates_by_month_day(check_date.month, check_date.day)
             for tax in results:
-                ack_key = self._get_ack_key(tax, check_date)
-                if ack_key not in self.acks:
+                if not self.db.is_paid(tax['id'], check_date.year):
                     tax['days_until'] = days_ahead
-                    tax['ack_key'] = ack_key
+                    tax['year'] = check_date.year
                     tax['date_obj'] = check_date
                     upcoming.append(tax)
         return upcoming
@@ -117,7 +109,7 @@ class TaxBot:
             if len(btn_text) > 60:
                 btn_text = btn_text[:57] + "..."
                 
-            keyboard.append([{"text": f"✅ {btn_text}", "callback_data": f"pago_{tax['ack_key']}"}])
+            keyboard.append([{"text": f"✅ {btn_text}", "callback_data": f"pago_{tax['id']}_{tax['year']}"}])
 
         reply_markup = {"inline_keyboard": keyboard}
         return msg, reply_markup
@@ -179,12 +171,12 @@ class TaxBot:
         
         elif data.startswith("pago_"):
             # Step 1: Request Confirmation
-            ack_key = data.replace("pago_", "", 1)
+            payment_info = data.replace("pago_", "", 1)
             
             # Create a specific keyboard for this item to Confirm or Cancel
             confirm_keyboard = [[
-                {"text": "⚠️ Confirmar Pago", "callback_data": f"confirm_{ack_key}"},
-                {"text": "❌ Cancelar", "callback_data": f"cancel_{ack_key}"}
+                {"text": "⚠️ Confirmar Pago", "callback_data": f"confirm_{payment_info}"},
+                {"text": "❌ Cancelar", "callback_data": f"cancel_{payment_info}"}
             ]]
             
             self.send_request("editMessageReplyMarkup", {
@@ -196,31 +188,41 @@ class TaxBot:
 
         elif data.startswith("confirm_"):
             # Step 2: Actually Pay
-            ack_key = data.replace("confirm_", "", 1)
-            self.acknowledge_tax(ack_key)
+            payment_info = data.replace("confirm_", "", 1)
+            parts = payment_info.split('_')
             
-            self.send_request("answerCallbackQuery", {
-                "callback_query_id": cq_id,
-                "text": "✅ Marcado como pagado"
-            })
-            self.send_request("sendMessage", {
-                "chat_id": chat_id,
-                "text": f"✅ Registro `{ack_key}` marcado como pagado exitosamente.",
-                "parse_mode": "Markdown"
-            })
-            
-            # Optional: Remove the buttons or update to say "Paid"
-            # We can't easily revert to the full list sans this item without re-fetching, 
-            # so let's just edit the buttons playing clean.
-            self.send_request("editMessageReplyMarkup", {
-                "chat_id": chat_id,
-                "message_id": callback["message"]["message_id"],
-                "reply_markup": None # Remove buttons
-            })
+            if len(parts) == 2:
+                tax_id = int(parts[0])
+                year = int(parts[1])
+                self.acknowledge_tax(tax_id, year)
+                
+                self.send_request("answerCallbackQuery", {
+                    "callback_query_id": cq_id,
+                    "text": "✅ Marcado como pagado"
+                })
+                self.send_request("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": f"✅ Impuesto marcado como pagado exitosamente en BD.",
+                    "parse_mode": "Markdown"
+                })
+                
+                # Optional: Remove the buttons or update to say "Paid"
+                # We can't easily revert to the full list sans this item without re-fetching, 
+                # so let's just edit the buttons playing clean.
+                self.send_request("editMessageReplyMarkup", {
+                    "chat_id": chat_id,
+                    "message_id": callback["message"]["message_id"],
+                    "reply_markup": None # Remove buttons
+                })
+            else:
+                self.send_request("answerCallbackQuery", {
+                    "callback_query_id": cq_id,
+                    "text": "❌ Error parsing payment info"
+                })
 
         elif data.startswith("cancel_"):
             # Step 3: Cancel and Restore
-            ack_key = data.replace("cancel_", "", 1)
+            payment_info = data.replace("cancel_", "", 1)
             
             # Ideally we restore the original button. 
             # Since we don't have the full context easily, we'll put a generic "Pagar" button back
@@ -229,7 +231,7 @@ class TaxBot:
             # Let's put a simple button back.
             
             restore_keyboard = [[
-                {"text": "✅ Pagar (Restaurado)", "callback_data": f"pago_{ack_key}"}
+                {"text": "✅ Pagar (Restaurado)", "callback_data": f"pago_{payment_info}"}
             ]]
             
             self.send_request("editMessageReplyMarkup", {
@@ -292,19 +294,26 @@ class TaxBot:
                 "reply_markup": markup if markup else {}
             })
         elif text.startswith("/pago"):
-            parts = text.split(maxsplit=1)
-            if len(parts) > 1:
-                ack_key = parts[1]
-                self.acknowledge_tax(ack_key)
-                self.send_request("sendMessage", {
-                    "chat_id": chat_id,
-                    "text": f"✅ Registro `{ack_key}` marcado como pagado.",
-                    "parse_mode": "Markdown"
-                })
+            parts = text.split(maxsplit=2)
+            if len(parts) == 3:
+                try:
+                    tax_id = int(parts[1])
+                    year = int(parts[2])
+                    self.acknowledge_tax(tax_id, year)
+                    self.send_request("sendMessage", {
+                        "chat_id": chat_id,
+                        "text": f"✅ Impuesto ID {tax_id} marcado como pagado para el año {year}.",
+                        "parse_mode": "Markdown"
+                    })
+                except ValueError:
+                    self.send_request("sendMessage", {
+                        "chat_id": chat_id,
+                        "text": "❌ Formato incorrecto. Uso: `/pago [tax_id] [year]`"
+                    })
             else:
                 self.send_request("sendMessage", {
                     "chat_id": chat_id,
-                    "text": "❌ Falta la clave. Uso: `/pago [key]`"
+                    "text": "❌ Faltan parámetros. Uso: `/pago [tax_id] [year]`"
                 })
 
 def main():
@@ -315,7 +324,7 @@ def main():
     args = parser.parse_args()
 
     db_manager = DatabaseManager(DATABASE_URL)
-    bot = TaxBot(db_manager, ACK_FILE, AUTH_FILE, DEV_FILE)
+    bot = TaxBot(db_manager, AUTH_FILE, DEV_FILE)
     bot.developer_mode = args.developer
     
     if bot.developer_mode:

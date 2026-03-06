@@ -44,31 +44,9 @@ class TaxReminderGUI:
         self.setup_styles()
         self.create_widgets()
         
-        self.ack_file = os.path.join(base_dir, 'acknowledgements.json')
         self.load_data()
         
-    def _load_acks(self) -> Dict[str, Any]:
-        if os.path.exists(self.ack_file):
-            try:
-                with open(self.ack_file, 'r') as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        return {}
 
-    def _save_acks(self, data: Dict[str, Any]):
-        try:
-            with open(self.ack_file, 'w') as f:
-                json.dump(data, f, indent=4)
-        except Exception as e:
-            messagebox.showerror("Error", f"Error al guardar pago: {e}")
-
-    def _get_ack_key(self, table_name: str, month: int, day: int) -> str:
-        today = date.today()
-        current_year = today.year
-        if month < today.month or (month == today.month and day < today.day):
-            current_year += 1
-        return f"{current_year}_{table_name}_{month}_{day}"
         
     def setup_styles(self):
         """Configure dark mode styles"""
@@ -162,8 +140,6 @@ class TaxReminderGUI:
             today_reminders = []
             upcoming_reminders = []
 
-            acks = self._load_acks()
-
             # Logic adapted from mainshort.py
             for days_ahead in range(0, 3):
                 check_date = today + timedelta(days=days_ahead)
@@ -185,17 +161,17 @@ class TaxReminderGUI:
                         days_until = (reminder_date - today).days
 
                         # Check if paid
-                        ack_key = self._get_ack_key(date_obj.table_name, date_obj.month, date_obj.day)
-                        if ack_key in acks:
+                        if db.is_paid(date_obj.id, current_year):
                             continue
 
                         reminder = {
+                            'id': date_obj.id,
                             'table_description': table_desc,
                             'month': date_obj.month,
                             'day': date_obj.day,
                             'description': date_obj.description,
                             'days_until': days_until,
-                            'ack_key': ack_key
+                            'year': current_year
                         }
 
                         if days_until == 0:
@@ -269,11 +245,13 @@ class TaxReminderGUI:
         # Pay Button
         def pay_action():
             if messagebox.askyesno("Confirmar Pago", f"¿Marcar '{desc}' como PAGADO?"):
-                acks = self._load_acks()
-                acks[reminder['ack_key']] = date.today().isoformat()
-                self._save_acks(acks)
-                self.load_data() # Reload to hide
-                messagebox.showinfo("Hecho", "Impuesto marcado como pagado.")
+                try:
+                    db = DatabaseManager(self.db_url)
+                    db.mark_as_paid(reminder['id'], reminder['year'])
+                    self.load_data() # Reload to hide
+                    messagebox.showinfo("Hecho", "Impuesto marcado como pagado.")
+                except Exception as e:
+                    messagebox.showerror("Error", f"Error al registrar pago: {e}")
 
         ttk.Button(card, text="✅ Registrar Pago", command=pay_action).pack(anchor='e', pady=(10, 0))
 

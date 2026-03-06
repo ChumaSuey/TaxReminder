@@ -38,36 +38,6 @@ class TaxReminderMainGUI:
         self.setup_styles()
         self.create_widgets()
         
-        self.ack_file = os.path.join(base_dir, 'acknowledgements.json')
-        
-    def _load_acks(self) -> Dict[str, Any]:
-        if os.path.exists(self.ack_file):
-            try:
-                with open(self.ack_file, 'r') as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        return {}
-
-    def _save_acks(self, data: Dict[str, Any]):
-        try:
-            with open(self.ack_file, 'w') as f:
-                json.dump(data, f, indent=4)
-        except Exception as e:
-            messagebox.showerror("Error", f"Error al guardar pago: {e}")
-
-    def _get_ack_key(self, table_name: str, month: int, day: int) -> str:
-        # Match Telegram Bot format: YYYY_TableName_M_D
-        # Note: We need the year of the tax date, not necessarily current year.
-        # But for "upcoming" logic usually it's current or next year.
-        # Ideally we pass the full date object or calculated year.
-        # For now let's assume standard calculation logic inside the loop matches this.
-        today = date.today()
-        current_year = today.year
-        if month < today.month or (month == today.month and day < today.day):
-            current_year += 1
-        return f"{current_year}_{table_name}_{month}_{day}"
-        
     def setup_styles(self):
         """Configure dark mode styles"""
         self.style = ttk.Style()
@@ -170,8 +140,13 @@ class TaxReminderMainGUI:
         self.tab_manage = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_manage, text='📅 Gestionar Fechas')
         self.setup_manage_tab()
+
+        # Tab 3: Payment History
+        self.tab_history = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_history, text='📜 Historial de Pagos')
+        self.setup_history_tab()
         
-        # Tab 3: Tools
+        # Tab 4: Tools
         self.tab_tools = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_tools, text='🛠 Herramientas')
         self.setup_tools_tab()
@@ -187,6 +162,8 @@ class TaxReminderMainGUI:
             self.refresh_dashboard()
         elif tab_text == '📅 Gestionar Fechas':
             self.refresh_manage_list()
+        elif tab_text == '📜 Historial de Pagos':
+            self.refresh_history_list()
 
     # ================= DASHBOARD TAB =================
     
@@ -213,9 +190,6 @@ class TaxReminderMainGUI:
             today_reminders = []
             upcoming_reminders = []
 
-            # Load acknowledgements
-            acks = self._load_acks()
-
             # Logic same as gui_short.py / mainshort.py
             for days_ahead in range(0, 3):
                 check_date = today + timedelta(days=days_ahead)
@@ -236,17 +210,17 @@ class TaxReminderMainGUI:
                         days_until = (reminder_date - today).days
 
                         # Check if paid
-                        ack_key = self._get_ack_key(date_obj.table_name, date_obj.month, date_obj.day)
-                        if ack_key in acks:
+                        if self.db_manager.is_paid(date_obj.id, current_year):
                             continue # Skip paid taxes
 
                         reminder = {
+                            'id': date_obj.id,
                             'table_description': table_desc,
                             'month': date_obj.month,
                             'day': date_obj.day,
                             'description': date_obj.description,
                             'days_until': days_until,
-                            'ack_key': ack_key # Pass key for button
+                            'year': current_year
                         }
 
                         if days_until == 0:
@@ -305,11 +279,12 @@ class TaxReminderMainGUI:
         # Pay Button
         def pay_action():
             if messagebox.askyesno("Confirmar Pago", f"¿Marcar '{desc}' como PAGADO?"):
-                acks = self._load_acks()
-                acks[reminder['ack_key']] = date.today().isoformat()
-                self._save_acks(acks)
-                self.refresh_dashboard() # Reload to hide
-                messagebox.showinfo("Hecho", "Impuesto marcado como pagado.")
+                try:
+                    self.db_manager.mark_as_paid(reminder['id'], reminder['year'])
+                    self.refresh_dashboard() # Reload to hide
+                    messagebox.showinfo("Hecho", "Impuesto marcado como pagado.")
+                except Exception as e:
+                    messagebox.showerror("Error", f"Error al registrar pago: {e}")
 
         ttk.Button(card, text="✅ Registrar Pago", command=pay_action).pack(anchor='e', pady=(10, 0))
 
@@ -515,11 +490,169 @@ class TaxReminderMainGUI:
             try:
                 if self.db_manager.delete_date(date_id):
                     self.refresh_manage_list()
+                    self.refresh_dashboard()
+                    self.refresh_history_list()
                     messagebox.showinfo("Éxito", "Eliminado correctamente")
                 else:
                     messagebox.showerror("Error", "No se pudo eliminar.")
             except Exception as e:
                 messagebox.showerror("Error", str(e))
+
+    # ================= HISTORY TAB =================
+    def setup_history_tab(self):
+        # Main container
+        main_frame = ttk.Frame(self.tab_history)
+        main_frame.pack(fill='both', expand=True, padx=20, pady=20)
+        
+        # Header and filter
+        header_frame = ttk.Frame(main_frame)
+        header_frame.pack(fill='x', pady=(0, 15))
+        
+        ttk.Label(header_frame, text="Historial de Pagos", style='Header.TLabel').pack(side='left')
+        
+        filter_frame = ttk.Frame(header_frame)
+        filter_frame.pack(side='right')
+        
+        ttk.Label(filter_frame, text="Año:").pack(side='left', padx=(0, 5))
+        current_year = date.today().year
+        self.year_var = tk.StringVar(value=str(current_year))
+        
+        year_cb = ttk.Combobox(filter_frame, textvariable=self.year_var, width=8, state='readonly')
+        year_cb['values'] = [str(y) for y in range(current_year - 2, current_year + 3)]
+        year_cb.pack(side='left', padx=(0, 10))
+        year_cb.bind('<<ComboboxSelected>>', lambda e: self.refresh_history_list())
+        
+        ttk.Button(filter_frame, text="Actualizar", command=self.refresh_history_list).pack(side='left')
+        
+        # Treeview for history
+        columns = ('payment_id', 'tax_date_id', 'Impuesto', 'Fecha Vencimiento', 'Fecha Pago', 'Acción')
+        self.history_tree = ttk.Treeview(main_frame, columns=columns, show='headings')
+        
+        self.history_tree.heading('payment_id', text='ID Pago')
+        self.history_tree.heading('tax_date_id', text='ID Fecha')
+        self.history_tree.heading('Impuesto', text='Impuesto')
+        self.history_tree.heading('Fecha Vencimiento', text='Vencimiento')
+        self.history_tree.heading('Fecha Pago', text='Fecha de Pago')
+        self.history_tree.heading('Acción', text='Estado')
+        
+        self.history_tree.column('payment_id', width=0, stretch=tk.NO) # Hide ID columns
+        self.history_tree.column('tax_date_id', width=0, stretch=tk.NO)
+        self.history_tree.column('Impuesto', width=250)
+        self.history_tree.column('Fecha Vencimiento', width=120)
+        self.history_tree.column('Fecha Pago', width=120)
+        self.history_tree.column('Acción', width=100)
+        
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=self.history_tree.yview)
+        self.history_tree.configure(yscroll=scrollbar.set)
+        
+        self.history_tree.pack(side='left', fill='both', expand=True)
+        scrollbar.pack(side='right', fill='y')
+        
+        # Actions frame
+        actions_frame = ttk.Frame(main_frame)
+        actions_frame.pack(fill='x', pady=(15, 0))
+        
+        ttk.Button(actions_frame, text="Desmarcar Pago", command=self.unmark_payment_action).pack(side='left', padx=5)
+        ttk.Button(actions_frame, text="Marcar Pago Manual", command=self.mark_payment_manual_action).pack(side='left', padx=5)
+
+    def refresh_history_list(self):
+        # Clear existing
+        for item in self.history_tree.get_children():
+            self.history_tree.delete(item)
+            
+        try:
+            year = int(self.year_var.get())
+            
+            # 1. Get all taxes
+            all_taxes = []
+            with self.db_manager.get_db() as db:
+                results = db.query(TaxDate, TaxTable.description).join(
+                    TaxTable, TaxDate.table_name == TaxTable.name
+                ).all()
+                all_taxes = [(d, t) for d, t in results]
+                
+            # 2. Get payments for the year
+            payments = self.db_manager.get_payment_history(year)
+            paid_ids = {p['tax_date_id']: p for p in payments}
+            
+            # 3. Populate tree
+            for date_obj, table_desc in sorted(all_taxes, key=lambda x: (x[0].month, x[0].day)):
+                desc = self._format_table_name(table_desc)
+                vencimiento = f"{date_obj.day:02d} {self._get_month_name(date_obj.month)}"
+                
+                if date_obj.id in paid_ids:
+                    p = paid_ids[date_obj.id]
+                    self.history_tree.insert('', 'end', values=(
+                        p['payment_id'], 
+                        date_obj.id, 
+                        desc, 
+                        vencimiento, 
+                        p['payment_date'], 
+                        "✅ Pagado"
+                    ), tags=('paid',))
+                else:
+                    self.history_tree.insert('', 'end', values=(
+                        "", 
+                        date_obj.id, 
+                        desc, 
+                        vencimiento, 
+                        "-", 
+                        "❌ Pendiente"
+                    ), tags=('unpaid',))
+                    
+            self.history_tree.tag_configure('paid', foreground='green')
+            self.history_tree.tag_configure('unpaid', foreground='red')
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Error al cargar historial: {e}")
+
+    def unmark_payment_action(self):
+        selected = self.history_tree.selection()
+        if not selected:
+            messagebox.showwarning("Aviso", "Seleccione un pago para desmarcar.")
+            return
+            
+        item = self.history_tree.item(selected[0])
+        payment_id = item['values'][0]
+        impuesto = item['values'][2]
+        estado = item['values'][5]
+        
+        if estado != "✅ Pagado" or not payment_id:
+            messagebox.showinfo("Aviso", "El item seleccionado no está pagado.")
+            return
+            
+        if messagebox.askyesno("Confirmar", f"¿Desmarcar el pago de '{impuesto}'?"):
+            if self.db_manager.unmark_as_paid(payment_id):
+                self.refresh_history_list()
+                self.refresh_dashboard()
+                messagebox.showinfo("Éxito", "Pago desmarcado.")
+            else:
+                messagebox.showerror("Error", "No se pudo desmarcar el pago.")
+
+    def mark_payment_manual_action(self):
+        selected = self.history_tree.selection()
+        if not selected:
+            messagebox.showwarning("Aviso", "Seleccione un impuesto pendiente para pagar.")
+            return
+            
+        item = self.history_tree.item(selected[0])
+        tax_date_id = item['values'][1]
+        impuesto = item['values'][2]
+        estado = item['values'][5]
+        
+        if estado == "✅ Pagado":
+            messagebox.showinfo("Aviso", "El item seleccionado ya está pagado.")
+            return
+            
+        year = int(self.year_var.get())
+        if messagebox.askyesno("Confirmar Pago", f"¿Marcar '{impuesto}' como PAGADO en el año {year}?"):
+            if self.db_manager.mark_as_paid(tax_date_id, year):
+                self.refresh_history_list()
+                self.refresh_dashboard()
+                messagebox.showinfo("Éxito", "Impuesto marcado como pagado.")
+            else:
+                messagebox.showerror("Error", "No se pudo registrar el pago.")
 
     # ================= TOOLS TAB =================
 
