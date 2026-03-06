@@ -525,8 +525,12 @@ class TaxReminderMainGUI:
         ttk.Button(filter_frame, text="Actualizar", command=self.refresh_history_list).pack(side='left')
         
         # Treeview for history
+        # Contenedor para la tabla y el scrollbar para evitar que se mezclen con los botones
+        table_frame = ttk.Frame(main_frame)
+        table_frame.pack(fill='both', expand=True)
+        
         columns = ('payment_id', 'tax_date_id', 'Impuesto', 'Fecha Vencimiento', 'Fecha Pago', 'Acción')
-        self.history_tree = ttk.Treeview(main_frame, columns=columns, show='headings')
+        self.history_tree = ttk.Treeview(table_frame, columns=columns, show='headings', selectmode='extended')
         
         self.history_tree.heading('payment_id', text='ID Pago')
         self.history_tree.heading('tax_date_id', text='ID Fecha')
@@ -543,18 +547,57 @@ class TaxReminderMainGUI:
         self.history_tree.column('Acción', width=100)
         
         # Scrollbar
-        scrollbar = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=self.history_tree.yview)
+        scrollbar = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.history_tree.yview)
         self.history_tree.configure(yscroll=scrollbar.set)
         
         self.history_tree.pack(side='left', fill='both', expand=True)
         scrollbar.pack(side='right', fill='y')
         
-        # Actions frame
+        # Actions frame - Packed at the bottom of main_frame
         actions_frame = ttk.Frame(main_frame)
         actions_frame.pack(fill='x', pady=(15, 0))
         
-        ttk.Button(actions_frame, text="Desmarcar Pago", command=self.unmark_payment_action).pack(side='left', padx=5)
-        ttk.Button(actions_frame, text="Marcar Pago Manual", command=self.mark_payment_manual_action).pack(side='left', padx=5)
+        self.btn_unmark = ttk.Button(actions_frame, text="🗑 Desmarcar Pago(s)", command=self.unmark_payment_action, state='disabled')
+        self.btn_unmark.pack(side='left', padx=5)
+        
+        self.btn_mark = ttk.Button(actions_frame, text="✅ Marcar Pago(s) Manual", command=self.mark_payment_manual_action, state='disabled')
+        self.btn_mark.pack(side='left', padx=5)
+        
+        # Vincular selección para habilitar/deshabilitar botones
+        self.history_tree.bind('<<TreeviewSelect>>', lambda e: self._update_history_buttons())
+
+    def _update_history_buttons(self):
+        selected = self.history_tree.selection()
+        if not selected:
+            self.btn_unmark.configure(state='disabled')
+            self.btn_mark.configure(state='disabled')
+            return
+            
+        any_paid = False
+        any_unpaid = False
+        
+        for sel in selected:
+            item = self.history_tree.item(sel)
+            values = item['values']
+            if not values: continue
+            
+            estado = str(values[5])
+            if "Pagado" in estado:
+                any_paid = True
+            else:
+                any_unpaid = True
+        
+        # Enable unmark if there is at least one paid item selected
+        if any_paid:
+            self.btn_unmark.configure(state='normal')
+        else:
+            self.btn_unmark.configure(state='disabled')
+            
+        # Enable mark if there is at least one unpaid item selected
+        if any_unpaid:
+            self.btn_mark.configure(state='normal')
+        else:
+            self.btn_mark.configure(state='disabled')
 
     def refresh_history_list(self):
         # Clear existing
@@ -562,7 +605,9 @@ class TaxReminderMainGUI:
             self.history_tree.delete(item)
             
         try:
-            year = int(self.year_var.get())
+            year_val = self.year_var.get()
+            if not year_val: return
+            year = int(year_val)
             
             # 1. Get all taxes
             all_taxes = []
@@ -604,55 +649,74 @@ class TaxReminderMainGUI:
             self.history_tree.tag_configure('paid', foreground='green')
             self.history_tree.tag_configure('unpaid', foreground='red')
             
+            # Reset buttons
+            self._update_history_buttons()
+            
         except Exception as e:
             messagebox.showerror("Error", f"Error al cargar historial: {e}")
 
     def unmark_payment_action(self):
-        selected = self.history_tree.selection()
-        if not selected:
-            messagebox.showwarning("Aviso", "Seleccione un pago para desmarcar.")
-            return
-            
-        item = self.history_tree.item(selected[0])
-        payment_id = item['values'][0]
-        impuesto = item['values'][2]
-        estado = item['values'][5]
+        selected_ids = []
+        names = []
         
-        if estado != "✅ Pagado" or not payment_id:
-            messagebox.showinfo("Aviso", "El item seleccionado no está pagado.")
+        for sel in self.history_tree.selection():
+            item = self.history_tree.item(sel)
+            vals = item['values']
+            if not vals: continue
+            
+            # Solo procesar los que están pagados
+            if "Pagado" in str(vals[5]) and vals[0]:
+                selected_ids.append(int(vals[0]))
+                names.append(vals[2])
+                
+        if not selected_ids:
+            messagebox.showinfo("Aviso", "No hay pagos seleccionados para desmarcar.")
             return
             
-        if messagebox.askyesno("Confirmar", f"¿Desmarcar el pago de '{impuesto}'?"):
-            if self.db_manager.unmark_as_paid(payment_id):
-                self.refresh_history_list()
-                self.refresh_dashboard()
-                messagebox.showinfo("Éxito", "Pago desmarcado.")
-            else:
-                messagebox.showerror("Error", "No se pudo desmarcar el pago.")
+        count = len(selected_ids)
+        msg = f"¿Desmarcar {count} pago(s)?" if count > 1 else f"¿Desmarcar el pago de '{names[0]} '?"
+        
+        if messagebox.askyesno("Confirmar", msg):
+            success_count = 0
+            for p_id in selected_ids:
+                if self.db_manager.unmark_as_paid(p_id):
+                    success_count += 1
+            
+            self.refresh_history_list()
+            self.refresh_dashboard()
+            messagebox.showinfo("Éxito", f"Se desmarcaron {success_count} pago(s).")
 
     def mark_payment_manual_action(self):
-        selected = self.history_tree.selection()
-        if not selected:
-            messagebox.showwarning("Aviso", "Seleccione un impuesto pendiente para pagar.")
-            return
-            
-        item = self.history_tree.item(selected[0])
-        tax_date_id = item['values'][1]
-        impuesto = item['values'][2]
-        estado = item['values'][5]
+        selected_tax_ids = []
+        names = []
         
-        if estado == "✅ Pagado":
-            messagebox.showinfo("Aviso", "El item seleccionado ya está pagado.")
+        for sel in self.history_tree.selection():
+            item = self.history_tree.item(sel)
+            vals = item['values']
+            if not vals: continue
+            
+            # Solo procesar los que están pendientes
+            if "Pendiente" in str(vals[5]):
+                selected_tax_ids.append(int(vals[1]))
+                names.append(vals[2])
+                
+        if not selected_tax_ids:
+            messagebox.showinfo("Aviso", "No hay impuestos pendientes seleccionados.")
             return
             
         year = int(self.year_var.get())
-        if messagebox.askyesno("Confirmar Pago", f"¿Marcar '{impuesto}' como PAGADO en el año {year}?"):
-            if self.db_manager.mark_as_paid(tax_date_id, year):
-                self.refresh_history_list()
-                self.refresh_dashboard()
-                messagebox.showinfo("Éxito", "Impuesto marcado como pagado.")
-            else:
-                messagebox.showerror("Error", "No se pudo registrar el pago.")
+        count = len(selected_tax_ids)
+        msg = f"¿Marcar {count} impuestos como PAGADOS en {year}?" if count > 1 else f"¿Marcar '{names[0]} ' como PAGADO en {year}?"
+        
+        if messagebox.askyesno("Confirmar Pago", msg):
+            success_count = 0
+            for t_id in selected_tax_ids:
+                if self.db_manager.mark_as_paid(t_id, year):
+                    success_count += 1
+            
+            self.refresh_history_list()
+            self.refresh_dashboard()
+            messagebox.showinfo("Éxito", f"Se registraron {success_count} pago(s).")
 
     # ================= TOOLS TAB =================
 
