@@ -13,7 +13,8 @@ if sys.platform == 'win32':
 
 import tkinter as tk
 from tkinter import ttk, messagebox
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+import calendar
 from typing import List, Dict, Any
 
 # Add project root to path
@@ -25,6 +26,120 @@ sys.path.append(base_dir)
 
 from models import DatabaseManager, TaxDate, TaxTable
 
+class CalendarWidget(ttk.Frame):
+    def __init__(self, parent, colors, on_date_click=None, on_month_change=None):
+        super().__init__(parent, style='TFrame')
+        self.colors = colors
+        self.on_date_click = on_date_click
+        self.on_month_change = on_month_change
+        self.today = date.today()
+        self.current_month = self.today.month
+        self.current_year = self.today.year
+        self.highlighted_days = {} # {day: color}
+        
+        self.setup_ui()
+        self.draw_calendar()
+
+    def setup_ui(self):
+        # Header: Prev, Month Year, Next
+        header = ttk.Frame(self, style='TFrame')
+        header.pack(fill='x', pady=(0, 10))
+        
+        self.prev_btn = ttk.Button(header, text="<", width=3, command=self.prev_month)
+        self.prev_btn.pack(side='left')
+        
+        self.month_year_label = ttk.Label(header, text="", font=('Segoe UI', 11, 'bold'))
+        # Manually set foreground for this label as it's not a standard style yet
+        self.month_year_label.config(foreground=self.colors['fg'], background=self.colors['bg'])
+        self.month_year_label.pack(side='left', expand=True)
+        
+        self.next_btn = ttk.Button(header, text=">", width=3, command=self.next_month)
+        self.next_btn.pack(side='right')
+        
+        # Days of week header
+        days_header = ttk.Frame(self, style='TFrame')
+        days_header.pack(fill='x')
+        
+        days = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+        for i, day in enumerate(days):
+            lbl = ttk.Label(days_header, text=day, width=5, anchor='center', 
+                          foreground=self.colors['text_secondary'], font=('Segoe UI', 8))
+            lbl.grid(row=0, column=i, pady=2)
+            
+        # Days grid
+        self.days_frame = ttk.Frame(self, style='TFrame')
+        self.days_frame.pack(fill='both', expand=True)
+
+    def draw_calendar(self):
+        # Clear previous days
+        for widget in self.days_frame.winfo_children():
+            widget.destroy()
+            
+        self.month_year_label.config(text=f"{self._get_month_name(self.current_month)} {self.current_year}")
+        
+        cal = calendar.monthcalendar(self.current_year, self.current_month)
+        
+        for r, week in enumerate(cal):
+            for c, day in enumerate(week):
+                if day == 0:
+                    continue
+                
+                # Style for the day
+                bg = self.colors['card_bg']
+                fg = self.colors['fg']
+                
+                # Check if it's today
+                is_today = (day == self.today.day and 
+                           self.current_month == self.today.month and 
+                           self.current_year == self.today.year)
+                
+                # Check highlighting (taxes)
+                highlight_color = self.highlighted_days.get(day)
+                
+                day_frame = tk.Frame(self.days_frame, bg=bg, width=30, height=30)
+                day_frame.grid(row=r, column=c, padx=1, pady=1)
+                day_frame.grid_propagate(False)
+                
+                if highlight_color:
+                    day_frame.config(bg=highlight_color)
+                elif is_today:
+                    # Simple border for today if not highlighted
+                    day_frame.config(highlightbackground=self.colors['accent_blue'], highlightthickness=1)
+
+                lbl = tk.Label(day_frame, text=str(day), bg=day_frame['bg'], fg=fg, 
+                             font=('Segoe UI', 9, 'bold' if highlight_color or is_today else 'normal'))
+                lbl.pack(expand=True, fill='both')
+                
+                if self.on_date_click:
+                    lbl.bind("<Button-1>", lambda e, d=day: self.on_date_click(self.current_year, self.current_month, d))
+
+    def _get_month_name(self, month):
+        months = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+                  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+        return months[month - 1]
+
+    def prev_month(self):
+        self.current_month -= 1
+        if self.current_month < 1:
+            self.current_month = 12
+            self.current_year -= 1
+        self.draw_calendar()
+        if self.on_month_change:
+            self.on_month_change(self.current_year, self.current_month)
+
+    def next_month(self):
+        self.current_month += 1
+        if self.current_month > 12:
+            self.current_month = 1
+            self.current_year += 1
+        self.draw_calendar()
+        if self.on_month_change:
+            self.on_month_change(self.current_year, self.current_month)
+        
+    def set_highlights(self, highlighted_days):
+        self.highlighted_days = highlighted_days
+        self.draw_calendar()
+
 class TaxReminderMainGUI:
     def __init__(self, root):
         self.root = root
@@ -35,8 +150,36 @@ class TaxReminderMainGUI:
         self.db_url = f'sqlite:///{self.db_path}'
         self.db_manager = DatabaseManager(self.db_url)
         
+        self.config_path = os.path.join(base_dir, 'config.json')
+        self.load_config()
+        
         self.setup_styles()
         self.create_widgets()
+        
+    def load_config(self):
+        """Load settings from config.json"""
+        default_config = {'anticipation_days': 3}
+        if os.path.exists(self.config_path):
+            try:
+                with open(self.config_path, 'r') as f:
+                    self.config = json.load(f)
+                    # Merge with defaults for missing keys
+                    for k, v in default_config.items():
+                        if k not in self.config:
+                            self.config[k] = v
+            except:
+                self.config = default_config
+        else:
+            self.config = default_config
+            self.save_config()
+
+    def save_config(self):
+        """Save settings to config.json"""
+        try:
+            with open(self.config_path, 'w') as f:
+                json.dump(self.config, f, indent=4)
+        except Exception as e:
+            print(f"Error saving config: {e}")
         
     def setup_styles(self):
         """Configure dark mode styles"""
@@ -171,27 +314,90 @@ class TaxReminderMainGUI:
         container = ttk.Frame(self.tab_dashboard, padding="20")
         container.pack(fill='both', expand=True)
         
-        # Header
-        ttk.Label(container, text="Resumen de Vencimientos", style='Header.TLabel').pack(anchor='w', pady=(0, 20))
+        # Header Frame with Anticipation Control
+        header_frame = ttk.Frame(container)
+        header_frame.pack(fill='x', pady=(0, 20))
         
-        # Content Area
-        self.dashboard_content = ttk.Frame(container)
+        ttk.Label(header_frame, text="Resumen de Vencimientos", style='Header.TLabel').pack(side='left')
+        
+        days_frame = ttk.Frame(header_frame)
+        days_frame.pack(side='right')
+        
+        ttk.Label(days_frame, text="Anticipación (días):", font=('Segoe UI', 9)).pack(side='left', padx=(0, 5))
+        self.days_ahead_var = tk.IntVar(value=self.config.get('anticipation_days', 3))
+        
+        days_spin = ttk.Spinbox(days_frame, from_=0, to=30, width=5, 
+                              textvariable=self.days_ahead_var, command=self.on_anticipation_change)
+        days_spin.pack(side='left')
+        days_spin.bind('<Return>', lambda e: self.on_anticipation_change())
+        
+        # Content Area - Two columns
+        self.dashboard_columns = ttk.Frame(container)
+        self.dashboard_columns.pack(fill='both', expand=True)
+        
+        # Left: Reminders List
+        self.reminders_column = ttk.Frame(self.dashboard_columns)
+        self.reminders_column.pack(side='left', fill='both', expand=True)
+        
+        self.dashboard_content = ttk.Frame(self.reminders_column)
         self.dashboard_content.pack(fill='both', expand=True)
         
+        # Right: Calendar Panel
+        self.calendar_column = ttk.Frame(self.dashboard_columns, width=280)
+        self.calendar_column.pack(side='right', fill='y', padx=(20, 0))
+        self.calendar_column.pack_propagate(False)
+        
+        ttk.Label(self.calendar_column, text="Calendario Fiscal", 
+                 style='TLabel', font=('Segoe UI', 12, 'bold')).pack(pady=(0, 10))
+        
+        self.calendar = CalendarWidget(self.calendar_column, self.colors, 
+                                     on_month_change=self.update_calendar_highlights)
+        self.calendar.pack(pady=10)
+        
+        # Legend
+        legend_frame = ttk.Frame(self.calendar_column)
+        legend_frame.pack(fill='x', pady=5)
+        
+        # Pending circle
+        p_frame = tk.Frame(legend_frame, bg=self.colors['accent_gold'], width=12, height=12)
+        p_frame.pack(side='left', padx=(0, 5))
+        ttk.Label(legend_frame, text="Pendiente", font=('Segoe UI', 8)).pack(side='left', padx=(0, 15))
+        
+        # Today blue border (implied)
+        t_frame = tk.Frame(legend_frame, highlightbackground=self.colors['accent_blue'], highlightthickness=1, bg=self.colors['card_bg'], width=12, height=12)
+        t_frame.pack(side='left', padx=(0, 5))
+        ttk.Label(legend_frame, text="Hoy", font=('Segoe UI', 8)).pack(side='left')
+
         self.refresh_dashboard()
+
+    def on_anticipation_change(self):
+        """Update and save the anticipation days setting"""
+        try:
+            val = self.days_ahead_var.get()
+            if 0 <= val <= 30:
+                self.config['anticipation_days'] = val
+                self.save_config()
+                self.refresh_dashboard()
+        except:
+            pass
 
     def refresh_dashboard(self):
         # Clear current content
         for widget in self.dashboard_content.winfo_children():
             widget.destroy()
             
+        # Update calendar highlights
+        self.update_calendar_highlights(self.calendar.current_year, self.calendar.current_month)
+            
         try:
             today = date.today()
             today_reminders = []
             upcoming_reminders = []
+            
+            anticipation = self.config.get('anticipation_days', 3)
 
             # Logic same as gui_short.py / mainshort.py
-            for days_ahead in range(0, 3):
+            for days_ahead in range(0, anticipation + 1):
                 check_date = today + timedelta(days=days_ahead)
                 with self.db_manager.get_db() as session:
                     results = session.query(TaxDate, TaxTable.description).join(
@@ -248,6 +454,24 @@ class TaxReminderMainGUI:
         except Exception as e:
             ttk.Label(self.dashboard_content, text=f"Error al cargar datos: {e}", foreground='red').pack()
 
+    def update_calendar_highlights(self, year, month):
+        """Update the calendar to show highlighting for tax dates"""
+        highlighted = {}
+        try:
+            with self.db_manager.get_db() as session:
+                # Get all tax dates for this month
+                tax_dates = session.query(TaxDate).filter(TaxDate.month == month).all()
+                
+                for td in tax_dates:
+                    # Check if paid for THIS specific year
+                    is_paid = self.db_manager.is_paid(td.id, year)
+                    if not is_paid:
+                        highlighted[td.day] = self.colors['accent_gold']
+                        
+            self.calendar.set_highlights(highlighted)
+        except Exception as e:
+            print(f"Error updating calendar: {e}")
+
     def _format_table_name(self, name):
         if 'First_Fortnight' in name:
             return name.replace('First_Fortnight', 'Primera Quincena')
@@ -278,15 +502,15 @@ class TaxReminderMainGUI:
 
         # Pay Button
         def pay_action():
-            if messagebox.askyesno("Confirmar Pago", f"¿Marcar '{desc}' como PAGADO?"):
+            if messagebox.askyesno("Confirmar Pago", f"¿Confirmar '{desc}' como PAGADO?"):
                 try:
                     self.db_manager.mark_as_paid(reminder['id'], reminder['year'])
                     self.refresh_dashboard() # Reload to hide
-                    messagebox.showinfo("Hecho", "Impuesto marcado como pagado.")
+                    messagebox.showinfo("Hecho", "Pago confirmado correctamente.")
                 except Exception as e:
-                    messagebox.showerror("Error", f"Error al registrar pago: {e}")
+                    messagebox.showerror("Error", f"Error al confirmar pago: {e}")
 
-        ttk.Button(card, text="✅ Registrar Pago", command=pay_action).pack(anchor='e', pady=(10, 0))
+        ttk.Button(card, text="✅ Confirmar Pago", command=pay_action).pack(anchor='e', pady=(10, 0))
 
     # ================= MANAGE TAB =================
 
@@ -299,6 +523,7 @@ class TaxReminderMainGUI:
         toolbar.pack(fill='x', pady=(0, 15))
         
         ttk.Button(toolbar, text="➕ Agregar Nuevo", command=self.add_date_dialog).pack(side='left', padx=(0, 10))
+        ttk.Button(toolbar, text="⚡ Generador Rápido", command=self.quick_generator_dialog).pack(side='left', padx=(0, 10))
         ttk.Button(toolbar, text="✏️ Editar", command=self.edit_date_dialog).pack(side='left', padx=(0, 10))
         ttk.Button(toolbar, text="🗑 Eliminar", command=self.delete_date_dialog, style='Danger.TButton').pack(side='left')
         
@@ -498,6 +723,72 @@ class TaxReminderMainGUI:
             except Exception as e:
                 messagebox.showerror("Error", str(e))
 
+    def quick_generator_dialog(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Generador Rápido de Fechas")
+        dialog.geometry("450x400")
+        dialog.configure(bg=self.colors['bg'])
+        
+        # We need data for combo boxes
+        with self.db_manager.get_db() as session:
+            tables = session.query(TaxTable).all()
+            table_options = {t.description: t.name for t in tables}
+            table_names_display = list(table_options.keys())
+        
+        form = ttk.Frame(dialog, padding="20")
+        form.pack(fill='both', expand=True)
+
+        ttk.Label(form, text="⚡ Generar fechas recurrentes mensualmente", 
+                 style='Header.TLabel', font=('Segoe UI', 12, 'bold')).pack(anchor='w', pady=(0, 20))
+
+        ttk.Label(form, text="Tabla / Categoría:", style='TLabel').pack(anchor='w', pady=(0, 5))
+        table_var = tk.StringVar(value=table_names_display[0] if table_names_display else "")
+        table_cb = ttk.Combobox(form, textvariable=table_var, values=table_names_display, state="readonly")
+        table_cb.pack(fill='x', pady=(0, 15))
+        
+        ttk.Label(form, text="Día del mes (1-31):", style='TLabel').pack(anchor='w', pady=(0, 5))
+        day_var = tk.IntVar(value=15)
+        day_spin = ttk.Spinbox(form, from_=1, to=31, textvariable=day_var)
+        day_spin.pack(fill='x', pady=(0, 15))
+        
+        ttk.Label(form, text="Descripción común:", style='TLabel').pack(anchor='w', pady=(0, 5))
+        desc_var = tk.StringVar(value="Pago Mensual")
+        ttk.Entry(form, textvariable=desc_var).pack(fill='x', pady=(0, 25))
+        
+        def generate():
+            try:
+                sel_table = table_options[table_var.get()]
+                day = day_var.get()
+                description = desc_var.get()
+                
+                count = 0
+                with self.db_manager.get_db() as session:
+                    for m in range(1, 13):
+                        # Validez básica del día para el mes (evitar 31 de abril, etc.)
+                        try:
+                            date(2024, m, day)
+                        except ValueError:
+                            continue # Saltar meses que no tienen ese día
+                            
+                        # Check if exists
+                        exists = session.query(TaxDate).filter_by(
+                            table_name=sel_table, month=m, day=day
+                        ).first()
+                        
+                        if not exists:
+                            new_date = TaxDate(table_name=sel_table, month=m, day=day, description=description)
+                            session.add(new_date)
+                            count += 1
+                    session.commit()
+                
+                messagebox.showinfo("Éxito", f"Se generaron {count} nuevas fechas.")
+                dialog.destroy()
+                self.refresh_manage_list()
+            except Exception as e:
+                messagebox.showerror("Error", str(e))
+
+        ttk.Button(form, text="🚀 Generar para todo el año", command=generate).pack(fill='x')
+
     # ================= HISTORY TAB =================
     def setup_history_tab(self):
         # Main container
@@ -522,7 +813,8 @@ class TaxReminderMainGUI:
         year_cb.pack(side='left', padx=(0, 10))
         year_cb.bind('<<ComboboxSelected>>', lambda e: self.refresh_history_list())
         
-        ttk.Button(filter_frame, text="Actualizar", command=self.refresh_history_list).pack(side='left')
+        ttk.Button(filter_frame, text="🔄 Actualizar", command=self.refresh_history_list).pack(side='left', padx=(0, 10))
+        ttk.Button(filter_frame, text="📂 Exportar a CSV", command=self.export_history_action).pack(side='left')
         
         # Treeview for history
         # Contenedor para la tabla y el scrollbar para evitar que se mezclen con los botones
@@ -557,10 +849,10 @@ class TaxReminderMainGUI:
         actions_frame = ttk.Frame(main_frame)
         actions_frame.pack(fill='x', pady=(15, 0))
         
-        self.btn_unmark = ttk.Button(actions_frame, text="🗑 Desmarcar Pago(s)", command=self.unmark_payment_action, state='disabled')
+        self.btn_unmark = ttk.Button(actions_frame, text="🗑 Anular Pago(s)", command=self.unmark_payment_action, state='disabled')
         self.btn_unmark.pack(side='left', padx=5)
         
-        self.btn_mark = ttk.Button(actions_frame, text="✅ Marcar Pago(s) Manual", command=self.mark_payment_manual_action, state='disabled')
+        self.btn_mark = ttk.Button(actions_frame, text="✅ Confirmar Pago(s) Manual", command=self.mark_payment_manual_action, state='disabled')
         self.btn_mark.pack(side='left', padx=5)
         
         # Vincular selección para habilitar/deshabilitar botones
@@ -670,11 +962,11 @@ class TaxReminderMainGUI:
                 names.append(vals[2])
                 
         if not selected_ids:
-            messagebox.showinfo("Aviso", "No hay pagos seleccionados para desmarcar.")
+            messagebox.showinfo("Aviso", "No hay pagos seleccionados para anular.")
             return
             
         count = len(selected_ids)
-        msg = f"¿Desmarcar {count} pago(s)?" if count > 1 else f"¿Desmarcar el pago de '{names[0]} '?"
+        msg = f"¿Anular {count} pago(s)?" if count > 1 else f"¿Anular el pago de '{names[0]} '?"
         
         if messagebox.askyesno("Confirmar", msg):
             success_count = 0
@@ -684,7 +976,7 @@ class TaxReminderMainGUI:
             
             self.refresh_history_list()
             self.refresh_dashboard()
-            messagebox.showinfo("Éxito", f"Se desmarcaron {success_count} pago(s).")
+            messagebox.showinfo("Éxito", f"Se anularon {success_count} pago(s).")
 
     def mark_payment_manual_action(self):
         selected_tax_ids = []
@@ -701,12 +993,12 @@ class TaxReminderMainGUI:
                 names.append(vals[2])
                 
         if not selected_tax_ids:
-            messagebox.showinfo("Aviso", "No hay impuestos pendientes seleccionados.")
+            messagebox.showinfo("Aviso", "No hay impuestos pendientes seleccionados para confirmar.")
             return
             
         year = int(self.year_var.get())
         count = len(selected_tax_ids)
-        msg = f"¿Marcar {count} impuestos como PAGADOS en {year}?" if count > 1 else f"¿Marcar '{names[0]} ' como PAGADO en {year}?"
+        msg = f"¿Confirmar {count} pagos en el año {year}?" if count > 1 else f"¿Confirmar pago de '{names[0]}' para el año {year}?"
         
         if messagebox.askyesno("Confirmar Pago", msg):
             success_count = 0
@@ -716,7 +1008,41 @@ class TaxReminderMainGUI:
             
             self.refresh_history_list()
             self.refresh_dashboard()
-            messagebox.showinfo("Éxito", f"Se registraron {success_count} pago(s).")
+            messagebox.showinfo("Éxito", f"Se confirmaron {success_count} pago(s).")
+
+    def export_history_action(self):
+        """Export current filtered history to CSV"""
+        import csv
+        from tkinter import filedialog
+        
+        try:
+            year_val = self.year_var.get()
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                initialfile=f"Historial_Pagos_{year_val}.csv"
+            )
+            
+            if not filename:
+                return
+                
+            # Get data from treeview (it's already filtered)
+            with open(filename, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f)
+                # Header
+                writer.writerow(["Impuesto", "Vencimiento", "Año", "Fecha de Pago", "Estado"])
+                
+                # Rows
+                for item_id in self.history_tree.get_children():
+                    vals = self.history_tree.item(item_id)['values']
+                    if not vals: continue
+                    # vals: payment_id (0), tax_date_id (1), Impuesto (2), Vencimiento (3), Pago (4), Estado (5)
+                    writer.writerow([vals[2], vals[3], year_val, vals[4], vals[5]])
+                    
+            messagebox.showinfo("Éxito", f"Historial exportado correctamente a:\n{filename}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Error al exportar: {e}")
 
     # ================= TOOLS TAB =================
 
