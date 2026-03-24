@@ -1,6 +1,8 @@
 import os
+import sys
 import json
 import logging
+import calendar
 import time
 import requests
 from datetime import date, timedelta
@@ -9,14 +11,22 @@ from typing import List, Dict, Any
 from models import DatabaseManager, TaxDate, TaxTable
 import argparse
 
-# --- Configuration ---
+# --- Configuration (PLACEHOLDERS) ---
+# Set these in your environment variables or replace directly for local use
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_CHAT_ID_HERE")
 SECRET_PASSWORD = os.getenv("TELEGRAM_BOT_PASSWORD", "YOUR_SECRET_PASSWORD_HERE")
 
-DATABASE_URL = "sqlite:///tax_reminder.db"
-AUTH_FILE = "authorized_users.json"
-DEV_FILE = "dev_users.json"
+# Path setup
+if getattr(sys, 'frozen', False):
+    base_dir = os.path.dirname(sys.executable)
+else:
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+DATABASE_URL = f"sqlite:///{os.path.join(base_dir, 'tax_reminder.db')}"
+AUTH_FILE = os.path.join(base_dir, "authorized_users.json")
+DEV_FILE = os.path.join(base_dir, "dev_users.json")
+CONFIG_FILE = os.path.join(base_dir, "config.json")
 
 # Logging setup
 logging.basicConfig(
@@ -26,10 +36,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class TaxBot:
-    def __init__(self, db_manager: DatabaseManager, auth_file: str, dev_file: str = DEV_FILE):
+    def __init__(self, db_manager: DatabaseManager, auth_file: str, dev_file: str = DEV_FILE, config_file: str = CONFIG_FILE):
         self.db = db_manager
         self.auth_file = auth_file
         self.dev_file = dev_file
+        self.config_file = config_file
         self.last_update_id = 0
         self.developer_mode = False
         self.reload_configs()
@@ -38,6 +49,9 @@ class TaxBot:
         """Reload all JSON configuration files from disk."""
         self.authorized_users = self._load_data(self.auth_file)
         self.dev_users = self._load_data(self.dev_file)
+        self.config = self._load_data(self.config_file)
+        if 'anticipation_days' not in self.config:
+            self.config['anticipation_days'] = 3
 
     def _load_data(self, file_path: str) -> Dict[str, Any]:
         if os.path.exists(file_path):
@@ -72,9 +86,12 @@ class TaxBot:
         return str(chat_id) in self.authorized_users
 
     def get_upcoming_taxes(self) -> List[Dict[str, Any]]:
+        self.reload_configs()
         today = date.today()
         upcoming = []
-        for days_ahead in range(0, 3):
+        anticipation = self.config.get('anticipation_days', 3)
+        
+        for days_ahead in range(0, anticipation + 1):
             check_date = today + timedelta(days=days_ahead)
             results = self.db.get_dates_by_month_day(check_date.month, check_date.day)
             for tax in results:
@@ -85,6 +102,49 @@ class TaxBot:
                     upcoming.append(tax)
         return upcoming
 
+    def get_pending_days_for_month(self, year, month):
+        """Helper to find which days have pending taxes in a given month"""
+        pending = []
+        with self.db.get_db() as session:
+            results = session.query(TaxDate).filter_by(month=month).all()
+            for tax in results:
+                if not self.db.is_paid(tax.id, year):
+                    pending.append(tax.day)
+        return set(pending)
+
+    def get_text_calendar(self, year, month):
+        """Generates the emoji-based text calendar grid"""
+        # Ensure Monday is the first day
+        cal = calendar.Calendar(firstweekday=0)
+        month_days = cal.monthdayscalendar(year, month)
+        
+        pending_days = self.get_pending_days_for_month(year, month)
+        today = date.today()
+        
+        # Build message
+        month_name = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", 
+                      "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"][month-1]
+        
+        header = f"📅 *{month_name} {year}*\n"
+        header += "`LU MA MI JU VI SA DO` \n"
+        
+        body = ""
+        for week in month_days:
+            week_str = ""
+            for day in week:
+                if day == 0:
+                    week_str += "   "
+                elif day == today.day and month == today.month and year == today.year:
+                    week_str += "🔵 " # Today
+                elif day in pending_days:
+                    week_str += "🟡 " # Pending
+                else:
+                    week_str += f"{day:02d} "
+            body += f"`{week_str}`\n"
+        
+        footer = "\n🟡 = Pendiente | 🔵 = Hoy"
+        return header + body + footer
+
     def format_message(self, taxes: List[Dict[str, Any]]) -> tuple[str, Dict[str, Any]]:
         if not taxes:
             return "✅ No hay vencimientos pendientes para los próximos 2 días.", None
@@ -93,7 +153,7 @@ class TaxBot:
         keyboard = []
         
         for tax in sorted(taxes, key=lambda x: x['days_until']):
-            when = "HOY" if tax['days_until'] == 0 else ("MAÑANA" if tax['days_until'] == 1 else "PASADO MAÑANA")
+            when = "HOY" if tax['days_until'] == 0 else ("MAÑANA" if tax['days_until'] == 1 else f"en {tax['days_until']} días")
             date_str = tax['date_obj'].strftime('%d/%m/%Y')
             
             # Message text
@@ -103,9 +163,8 @@ class TaxBot:
                 msg += f"📝 Detalle: {tax['description']}\n"
             msg += "\n" # Spacing
             
-            # Button
-            btn_text = f"Pagar {tax['table_description']} ({date_str})"
-            # Limit button text length to avoid errors, though unlikely with these fields
+            # Button - Updated Terminology "Confirmar"
+            btn_text = f"Confirmar {tax['table_description']} ({date_str})"
             if len(btn_text) > 60:
                 btn_text = btn_text[:57] + "..."
                 
@@ -113,6 +172,17 @@ class TaxBot:
 
         reply_markup = {"inline_keyboard": keyboard}
         return msg, reply_markup
+
+    def get_main_menu_markup(self):
+        """Standard keyboard at bottom of screen"""
+        return {
+            "keyboard": [
+                [{"text": "🔄 Consultar Vencimientos"}, {"text": "📅 Ver Calendario"}],
+                [{"text": "📂 Exportar CSV"}, {"text": "❓ Ayuda / Menú"}]
+            ],
+            "resize_keyboard": True,
+            "one_time_keyboard": False
+        }
 
     def send_request(self, method: str, payload: Dict[str, Any] = None) -> Dict[str, Any]:
         if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
@@ -147,7 +217,6 @@ class TaxBot:
         cq_id = callback["id"]
         data = callback.get("data", "")
         chat_id = callback["message"]["chat"]["id"]
-        # message_id = callback["message"]["message_id"] # useful if we want to edit the message
 
         # Basic Auth Check
         if not self.is_authorized(chat_id):
@@ -170,18 +239,31 @@ class TaxBot:
             self.send_request("answerCallbackQuery", {"callback_query_id": cq_id})
         
         elif data.startswith("pago_"):
-            # Step 1: Request Confirmation
+            # Step 1: Request Confirmation (Dynamic UI protection)
             payment_info = data.replace("pago_", "", 1)
+            parts = payment_info.split('_')
+            tax_id = int(parts[0])
+            tax_year = int(parts[1])
             
-            # Create a specific keyboard for this item to Confirm or Cancel
+            # Get details for the confirmation message
+            tax_name = "Impuesto"
+            with self.db.get_db() as session:
+                tax_obj = session.query(TaxDate, TaxTable.description).join(
+                    TaxTable, TaxDate.table_name == TaxTable.name
+                ).filter(TaxDate.id == tax_id).first()
+                if tax_obj:
+                    tax_name = tax_obj[1]
+            
             confirm_keyboard = [[
                 {"text": "⚠️ Confirmar Pago", "callback_data": f"confirm_{payment_info}"},
                 {"text": "❌ Cancelar", "callback_data": f"cancel_{payment_info}"}
             ]]
             
-            self.send_request("editMessageReplyMarkup", {
+            self.send_request("editMessageText", {
                 "chat_id": chat_id,
                 "message_id": callback["message"]["message_id"],
+                "text": f"❓ ¿Confirmar pago de *{tax_name}* para el año {tax_year}?\n\nEsta acción registrará el pago en la base de datos.",
+                "parse_mode": "Markdown",
                 "reply_markup": {"inline_keyboard": confirm_keyboard}
             })
             self.send_request("answerCallbackQuery", {"callback_query_id": cq_id})
@@ -198,21 +280,14 @@ class TaxBot:
                 
                 self.send_request("answerCallbackQuery", {
                     "callback_query_id": cq_id,
-                    "text": "✅ Marcado como pagado"
+                    "text": "✅ Pago confirmado"
                 })
-                self.send_request("sendMessage", {
-                    "chat_id": chat_id,
-                    "text": f"✅ Impuesto marcado como pagado exitosamente en BD.",
-                    "parse_mode": "Markdown"
-                })
-                
-                # Optional: Remove the buttons or update to say "Paid"
-                # We can't easily revert to the full list sans this item without re-fetching, 
-                # so let's just edit the buttons playing clean.
-                self.send_request("editMessageReplyMarkup", {
+                self.send_request("editMessageText", {
                     "chat_id": chat_id,
                     "message_id": callback["message"]["message_id"],
-                    "reply_markup": None # Remove buttons
+                    "text": f"✅ Pago confirmado exitosamente.",
+                    "parse_mode": "Markdown",
+                    "reply_markup": None
                 })
             else:
                 self.send_request("answerCallbackQuery", {
@@ -221,23 +296,12 @@ class TaxBot:
                 })
 
         elif data.startswith("cancel_"):
-            # Step 3: Cancel and Restore
-            payment_info = data.replace("cancel_", "", 1)
-            
-            # Ideally we restore the original button. 
-            # Since we don't have the full context easily, we'll put a generic "Pagar" button back
-            # or we could try to just "refresh" the whole list if it was a /check command?
-            # But this is a specific message. 
-            # Let's put a simple button back.
-            
-            restore_keyboard = [[
-                {"text": "✅ Pagar (Restaurado)", "callback_data": f"pago_{payment_info}"}
-            ]]
-            
-            self.send_request("editMessageReplyMarkup", {
+            # Step 3: Cancel and Restore view
+            self.send_request("editMessageText", {
                 "chat_id": chat_id,
                 "message_id": callback["message"]["message_id"],
-                "reply_markup": {"inline_keyboard": restore_keyboard}
+                "text": "❌ Acción cancelada. Usa /check para ver la lista de nuevo.",
+                "reply_markup": None
             })
             self.send_request("answerCallbackQuery", {"callback_query_id": cq_id, "text": "Cancelado"})
             
@@ -268,7 +332,6 @@ class TaxBot:
                     })
             else:
                 logger.warning(f"Ignored message from unauthorized chat: {chat_id}")
-                # Optional: Send a hint to unauthorized users
                 self.send_request("sendMessage", {
                     "chat_id": chat_id,
                     "text": "🔒 No tienes acceso. Por favor usa `/login [contraseña]` para entrar."
@@ -276,23 +339,39 @@ class TaxBot:
             return
 
         # Commands for authorized users
-        if text == "/start" or text == "/help":
-            keyboard = [[{"text": "🔄 Consultar Vencimientos", "callback_data": "check"}]]
+        if text == "/start" or text == "/help" or text == "/menu" or text == "❓ Ayuda / Menú":
             self.send_request("sendMessage", {
                 "chat_id": chat_id,
-                "text": "👋 Hola! Soy tu bot de impuestos.\n\nUsa el botón de abajo o escribe /check para ver vencimientos.",
+                "text": "👋 *Bienvenido al menú de TaxReminder*\n\n"
+                        "Usa los botones de abajo o los comandos:\n\n"
+                        "🔄 `/check` - Ver vencimientos próximos\n"
+                        "📅 `/calendario` - Ver mapa visual del mes\n"
+                        "📂 `/export` - Recibir historial en CSV (Excel)\n"
+                        "✅ `/pago [ID] [AÑO]` - Confirmar pago manual\n"
+                        "📝 `/menu` - Mostrar este mensaje",
                 "parse_mode": "Markdown",
-                "reply_markup": {"inline_keyboard": keyboard}
+                "reply_markup": self.get_main_menu_markup()
             })
-        elif text == "/check":
+        elif text == "/check" or text == "🔄 Consultar Vencimientos":
             taxes = self.get_upcoming_taxes()
             msg, markup = self.format_message(taxes)
             self.send_request("sendMessage", {
                 "chat_id": chat_id,
                 "text": msg,
                 "parse_mode": "Markdown",
-                "reply_markup": markup if markup else {}
+                "reply_markup": markup if markup else self.get_main_menu_markup()
             })
+        elif text == "/calendario" or text == "📅 Ver Calendario":
+            today = date.today()
+            cal_msg = self.get_text_calendar(today.year, today.month)
+            self.send_request("sendMessage", {
+                "chat_id": chat_id,
+                "text": cal_msg,
+                "parse_mode": "Markdown",
+                "reply_markup": self.get_main_menu_markup()
+            })
+        elif text == "/export" or text == "📂 Exportar CSV":
+            self.handle_export(chat_id)
         elif text.startswith("/pago"):
             parts = text.split(maxsplit=2)
             if len(parts) == 3:
@@ -316,6 +395,40 @@ class TaxBot:
                     "text": "❌ Faltan parámetros. Uso: `/pago [tax_id] [year]`"
                 })
 
+    def handle_export(self, chat_id: int):
+        """Generate and send CSV history to user"""
+        import csv
+        import io
+        
+        try:
+            current_year = date.today().year
+            history = self.db.get_payment_history(current_year)
+            
+            output = io.StringIO()
+            # BOM for Excel
+            output.write('\ufeff')
+            writer = csv.writer(output)
+            writer.writerow(["Impuesto", "Vencimiento", "Año", "Fecha de Pago", "Estado"])
+            
+            for p in history:
+                vencimiento = f"{p['day']:02d}/{p['month']:02d}"
+                writer.writerow([p['table_description'], vencimiento, p['year'], p['payment_date'], "✅ Pagado"])
+                
+            # Send as file
+            file_data = output.getvalue().encode('utf-8')
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+            files = {'document': (f'Historial_Pagos_{current_year}.csv', file_data)}
+            data = {'chat_id': chat_id, 'caption': f'📂 Historial de impuestos para el año {current_year}'}
+            
+            requests.post(url, data=data, files=files)
+            
+        except Exception as e:
+            logger.error(f"Error in handle_export: {e}")
+            self.send_request("sendMessage", {
+                "chat_id": chat_id,
+                "text": f"❌ Error al generar el reporte: {e}"
+            })
+
 def main():
     parser = argparse.ArgumentParser(description="Tax Reminder Telegram Bot")
     parser.add_argument("--notify-only", action="store_true", help="Send upcoming notifications and exit immediately.")
@@ -334,17 +447,13 @@ def main():
     upcoming = bot.get_upcoming_taxes()
     if upcoming:
         logger.info(f"Found {len(upcoming)} initial taxes. Sending reminders...")
-        
-        # Ensure we have the latest user lists before broadcasting
         bot.reload_configs()
         
         # Determine recipients
         recipients = []
         if bot.developer_mode:
-            # Only active developers
             recipients = [uid for uid, info in bot.dev_users.items() if info.get("active")]
         else:
-            # Owner + all authorized users
             recipients = [CHAT_ID] + list(bot.authorized_users.keys())
 
         for user_id in set(recipients):
@@ -358,12 +467,10 @@ def main():
     else:
         logger.info("No upcoming taxes found.")
 
-    # If notify-only is set, exit here
     if args.notify_only:
         logger.info("Notify-only mode complete. Exiting.")
         return
 
-    # Start the interactive loop
     try:
         bot.listen()
     except KeyboardInterrupt:
