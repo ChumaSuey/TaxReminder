@@ -55,7 +55,6 @@ Or set environment variables:
 
 - `python developer_cmd.py` - Launches bot in developer mode
 - `python listener_cmd.py` - Launches bot in listener mode
-- `python notifier_cmd.py` - Launches bot in notify-only mode
 
 **Background (Windows)**: Run `python createvbshost.py` once, then double-click the resulting `start_bot.vbs`.
 
