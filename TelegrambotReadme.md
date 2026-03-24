@@ -1,70 +1,50 @@
-# 📅 Telegram Tax Reminder Bot
+# 📅 Telegram Tax Reminder Bot (v2.0)
 
-An interactive Telegram bot that queries the Tax Reminder database and sends proactive alerts for upcoming tax deadlines.
+An interactive, secure, and modern Telegram bot that synchronizes with the TaxReminder Desktop application. It provides proactive alerts, visual calendars, and easy document export directly from your chat.
 
-## ✨ Key Features
+## ✨ Modern Features
 
-- **Real-time Integration**: Queries `tax_reminder.db` directly.
-- **Nagging Alerts**: Reminds you 2 days before, 1 day before, and on the day of the tax.
-- **Interactive Buttons**: Click buttons to mark taxes as paid with confirmation workflow.
-- **Acknowledgement System**: Stop alerts for specific periods by acknowledging payments.
-- **Multi-User**: Secure password-based system for multiple authorized users.
-- **Developer Mode**: Test mode that sends notifications only to active developers.
-- **Background Mode**: Run silently on Windows without a terminal window.
+- **Interactive Main Menu**: Persistent bottom menu for quick access to status, calendar, and reports.
+- **Text-Based Visual Calendar**: An emoji-based month grid (`🟡` Pending, `🔵` Today) for a quick fiscal overview.
+- **Smart Reminders**: Synchronizes with `config.json` to remind you according to your custom anticipation settings.
+- **Double-Confirmation Workspace**: Advanced confirmation flow (`Confirm` / `Cancel`) to prevent accidental payment entries on mobile.
+- **CSV Export**: Request and receive Excel-compatible payment history reports directly in the chat.
+- **Multi-User Security**: Robust password-based `/login` system for multiple authorized users.
+- **Developer Mode**: Specialized test mode for safe debugging without notifying real users.
 
-## 🤖 Commands
+## 🤖 Commands & Interaction
 
-- `/start` or `/help` - Show welcome message and quick action button.
-- `/check` - Display taxes due in the next 3 days with interactive payment buttons.
-- `/pago [key]` - Mark a specific tax as paid (alternative to buttons).
-- `/login [password]` - Authorize yourself to use the bot (for new users).
+- `🔄 Consultar Vencimientos` / `/check`: Shows pending taxes for upcoming days (defined in settings).
+- `📅 Ver Calendario` / `/calendario`: Displays the visual month grid with emoji highlights.
+- `📂 Exportar CSV` / `/export`: Generates and sends a `.csv` report of the current year's history.
+- `❓ Ayuda / Menú` / `/menu`: Displays the main welcome message and all available commands.
+- `✅ Confirmar Pago`: Interactive workflow to mark taxes as paid in the database.
+- `/login [password]`: Authorize a new device/user.
 
-## 🔘 Interactive Features
+## 🛠️ Setup & Security
 
-The bot provides **inline keyboard buttons** for:
+### 1. Configuration (Public/Template)
+For public repositories or code sharing, use **`telegram_bot_template.py`**. 
+It includes all the logic but requires you to provide your credentials:
 
-- **Quick Check**: Button to instantly view upcoming taxes.
-- **Payment Buttons**: Each tax has a "Pagar" (Pay) button.
-- **Confirmation Flow**: Two-step confirmation (Confirm/Cancel) to prevent accidental marking.
+- `BOT_TOKEN`: From Telegram's @BotFather.
+- `CHAT_ID`: Your personal Telegram Numeric ID.
+- `SECRET_PASSWORD`: Your custom access password for the `/login` command.
 
-## 🛠️ Setup & Usage
+### 2. Private Setup
+The actual production script is **`telegram_bot.py`**. 
+> [!WARNING]
+> This file is listed in `.gitignore` to prevent sensitive credentials from being pushed to public version control. **Never remove it from .gitignore if it contains your real Token.**
 
-### 1. Configuration
+### 3. Running the Bot
+- **Standard Linker**: `python telegram_bot.py --listen`
+- **Notify Only**: `python telegram_bot.py --notify-only` (Ideal for CRON jobs)
+- **Developer Mode**: `python developer_cmd.py`
 
-Edit `telegram_bot.py` and provide:
-
-- `BOT_TOKEN` (from @BotFather)
-- `CHAT_ID` (your personal ID)
-- `SECRET_PASSWORD` (your chosen password)
-
-Or set environment variables:
-
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
-- `TELEGRAM_BOT_PASSWORD`
-
-### 2. Running the Bot
-
-**Basic modes:**
-
-- `python telegram_bot.py` - Standard listener mode
-- `python telegram_bot.py --notify-only` - Send notifications once and exit
-- `python telegram_bot.py --developer` - Developer mode (restricted recipients)
-
-**Convenience wrappers:**
-
-- `python developer_cmd.py` - Launches bot in developer mode
-- `python listener_cmd.py` - Launches bot in listener mode
-
-**Background (Windows)**: Run `python createvbshost.py` once, then double-click the resulting `start_bot.vbs`.
-
-### 3. Developer Mode
-
-When running with `--developer` flag, notifications are sent only to users listed in `dev_users.json` with `"active": true`. Useful for testing without spamming all users.
-
-### 4. Security
-
-When sharing this code, run `python cleanTOKENID.py` to automatically remove all sensitive credentials (Tokens, IDs, and Passwords) from the source code.
+### 4. Background (Windows)
+To run the bot in the background (hidden terminal):
+1. Ensure the `.exe` versions in the `dist/` folder are used, or:
+2. Use a `.vbs` wrapper to launch the Python script silently.
 
 ---
-*Created for the TaxReminder Project*
+*Created for the TaxReminder Project. Modernized in Phase 2.*
