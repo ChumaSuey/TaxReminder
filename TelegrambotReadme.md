@@ -21,22 +21,18 @@ An interactive, secure, and modern Telegram bot that synchronizes with the TaxRe
 - `✅ Confirmar Pago`: Interactive workflow to mark taxes as paid in the database.
 - `/login [password]`: Authorize a new device/user.
 
-## 🛠️ Setup & Security
+### 1. Configuration (.env)
+1. Copy the **`.env.template`** file to a new file named **`.env`**.
+2. Fill in the following variables:
+   - `TELEGRAM_BOT_TOKEN`: From Telegram's @BotFather.
+   - `TELEGRAM_CHAT_ID`: Your personal Telegram Numeric ID.
+   - `TELEGRAM_BOT_PASSWORD`: Your custom access password for the `/login` command.
 
-### 1. Configuration (Public/Template)
-For public repositories or code sharing, use **`telegram_bot_template.py`**. 
-It includes all the logic but requires you to provide your credentials:
-
-- `BOT_TOKEN`: From Telegram's @BotFather.
-- `CHAT_ID`: Your personal Telegram Numeric ID.
-- `SECRET_PASSWORD`: Your custom access password for the `/login` command.
-
-### 2. Private Setup
-The actual production script is **`telegram_bot.py`**. 
 > [!WARNING]
-> This file is listed in `.gitignore` to prevent sensitive credentials from being pushed to public version control. **Never remove it from .gitignore if it contains your real Token.**
+> The `.env` file is listed in `.gitignore` to prevent sensitive credentials from being pushed to public version control. **Never share your real .env file.**
 
-### 3. Running the Bot
+### 2. Running the Bot
+- **Dependencies:** `pip install python-dotenv`
 - **Standard Linker**: `python telegram_bot.py --listen`
 - **Notify Only**: `python telegram_bot.py --notify-only` (Ideal for CRON jobs)
 - **Developer Mode**: `python developer_cmd.py`

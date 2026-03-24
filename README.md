@@ -27,12 +27,11 @@ A complete suite for managing tax payments, consisting of a modern Desktop GUI a
 1. Clone the repository or download the source.
 2. Install dependencies:
    ```bash
-   pip install sqlalchemy requests
+   pip install sqlalchemy requests python-dotenv
    ```
-3. Set your environment variables (optional but recommended for the Bot):
-   - `TELEGRAM_BOT_TOKEN`: Your API token from @BotFather.
-   - `TELEGRAM_CHAT_ID`: Your personal chat ID.
-   - `TELEGRAM_BOT_PASSWORD`: Secret password for the `/login` command.
+3. Set your environment variables:
+   - Copy `.env.template` to `.env`.
+   - Fill in your `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and `TELEGRAM_BOT_PASSWORD`.
 
 ### Running the App
 - **GUI:** Run `python gui_main.py` or use the `TaxRGUI.exe` in the `dist/` folder.
