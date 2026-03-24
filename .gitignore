@@ -12,5 +12,4 @@ acknowledgments.json
 config.json
 result.txt
 .python-version
-telegram_bot.py
 .env
