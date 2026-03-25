@@ -42,6 +42,8 @@ A complete suite for managing tax payments, consisting of a modern Desktop GUI a
 - `telegram_bot.py`: Telegram bot core and interaction logic.
 - `models.py`: Database schema and management.
 - `config.json`: Persistent user settings.
+- `tax_reminder.db`: Database file.
+- `authorized_users.json`: Authorized users for the Telegram bot.
 - `dist/`: Ready-to-use standalone executables for Windows.
 
 ## 📄 License
